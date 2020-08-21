@@ -27,23 +27,29 @@ func init() {
 	}
 
 	// really we could/should use a shared STORE for this whole thing, but...
-	s, err := NewStore(dbConn)
+	s, err := NewStore("sqlite", dbConn)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		log.Fatal(err.Error())
 	}
 	// we do the setup of the database.  This probably wouldn't happen in RW code.
-	statement, err := dbConn.Prepare("CREATE TABLE IF NOT EXISTS routes (id INTEGER PRIMARY KEY, short_key TEXT, url TEXT, creatorid int, teamid int, created_at datetime, modified_at datetime, last_modified_by int)")
-	if err != nil {
-		// kill process because we won't have a DB anyway
-		log.Fatal(err.Error())
+	initStatements := []string{
+		"CREATE TABLE IF NOT EXISTS routes (id INTEGER PRIMARY KEY, short_key TEXT, url TEXT, creatorid int, teamid int, created_at datetime, modified_at datetime, last_modified_by int)",
+		"CREATE UNIQUE INDEX idx_short_key ON routes(short_key)",
 	}
-	_, err = statement.Exec()
-	if err != nil {
-		// kill process because we won't have a DB anyway
-		log.Fatal(err.Error())
-	}
+	for _, stmt := range initStatements {
 
+		statement, err := dbConn.Prepare(stmt)
+		if err != nil {
+			// kill process because we won't have a DB anyway
+			log.Fatal(err.Error())
+		}
+		_, err = statement.Exec()
+		if err != nil {
+			// kill process because we won't have a DB anyway
+			log.Fatal(err.Error())
+		}
+	}
 	r, err := routes.NewRoute("a", "http://www.google.com", 1, 1)
 	if err != nil {
 		log.Fatal(err)
@@ -55,7 +61,7 @@ func init() {
 	}
 }
 func TestAdd(t *testing.T) {
-	s, err := NewStore(dbConn)
+	s, err := NewStore("sqlite", dbConn)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
@@ -73,7 +79,7 @@ func TestAdd(t *testing.T) {
 	}
 }
 func TestGet(t *testing.T) {
-	s, err := NewStore(dbConn)
+	s, err := NewStore("sqlite", dbConn)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())

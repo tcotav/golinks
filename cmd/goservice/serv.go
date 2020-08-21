@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/spf13/viper"
+	"github.com/tcotav/golinks/routes"
 	"github.com/tcotav/golinks/store"
 )
 
@@ -25,22 +27,45 @@ func logLine(rPointer []byte, remoteAddr string, requestURI string,
 const userAuthHeader = "UserNameAuth"
 const teamAuthHeader = "TeamNameAuth"
 
+type MsgReturn struct {
+	ReturnCode int
+	Routes     []routes.Route
+	Message    string
+}
+
 func add(w http.ResponseWriter, r *http.Request) {
-	user := r.Header.Get(userAuthHeader)
-	team := r.Header.Get(teamAuthHeader)
-	if user == "" || team == "" {
-		http.Error(w, "You must be authenticated", http.StatusInternalServerError)
-		return
+	if authRequired {
+		user := r.Header.Get(userAuthHeader)
+		team := r.Header.Get(teamAuthHeader)
+		if user == "" || team == "" {
+			http.Error(w, "You must be authenticated", http.StatusInternalServerError)
+			return
+		}
 	}
 
+	var route routes.Route
 	// what to do in the case of conflict?
-	vars := mux.Vars(r)
-	_, ok := vars["short_key"]
-	if !ok {
-		http.Error(w, "Invalid url format", http.StatusInternalServerError)
+	err := json.NewDecoder(r.Body).Decode(&route)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// process and handle
+	_, err := s.Add(route)
+	// check if err is a duplicate constraint
+	if s.IsSQLErrDuplicateContraint(err) {
+		http.Error(w, "Key Exists", http.StatusBadRequest)
+		return
+	} else if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("content-type", "application/json")
+	// return both lists
+	resp, _ := json.Marshal(MsgReturn{ReturnCode: http.StatusOK})
+	w.Write(resp)
 }
 
 /*
@@ -157,7 +182,7 @@ func main() {
 		log.Fatal("Check config -- unknown db type set")
 	}
 
-	s, err = store.NewStore(database)
+	s, err = store.NewStore(useDB, database)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		log.Fatal(err.Error())

@@ -4,10 +4,13 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/tcotav/golinks/routes"
 
 	// database driver for sql package
+
+	"github.com/mattn/go-sqlite3"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -17,8 +20,9 @@ import (
 // the handle to the database, i.e. the database handle representing a pool of zero or
 // more underlying connections.
 type SQLStore struct {
-	db    *sql.DB
-	cache *lru.Cache
+	dbtype string
+	db     *sql.DB
+	cache  *lru.Cache
 }
 
 var (
@@ -26,12 +30,12 @@ var (
 )
 
 // NewStore is the constructor for the Store struct and does the actual work of creating the DB handler.
-func NewStore(dbConn *sql.DB) (*SQLStore, error) {
+func NewStore(dbtype string, dbConn *sql.DB) (*SQLStore, error) {
 	if (SQLStore{}) != *sharedStore { // did we init store already
 		return sharedStore, nil // if so, hand it back
 	}
 	cache, _ := lru.New(500)
-	sharedStore = &SQLStore{db: dbConn, cache: cache}
+	sharedStore = &SQLStore{dbtype: dbtype, db: dbConn, cache: cache}
 	// end database setup
 	return sharedStore, nil
 }
@@ -102,6 +106,30 @@ func (s *SQLStore) GetURL(k string) (string, error) {
 		return url, nil
 	}
 	return "", errors.New("No match found")
+}
+
+func (s *SQLStore) IsSQLErrDuplicateContraint(err error) bool {
+
+	if s.dbtype == "sqlite" {
+		// (1555) SQLITE_CONSTRAINT_PRIMARYKEY
+		// (2579) SQLITE_CONSTRAINT_ROWID
+		if driverErr, ok := err.(sqlite3.Error); ok {
+			if driverErr.ExtendedCode == 1555 || driverErr.ExtendedCode == 2579 {
+				return true
+			}
+		}
+		return false
+	} else if s.dbtype == "mysql" {
+		// 1062 duplicate key
+		//
+		if driverErr, ok := err.(*mysql.MySQLError); ok {
+			if driverErr.Number == 1062 {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 func (s *SQLStore) Modify(routes.Route) error {
