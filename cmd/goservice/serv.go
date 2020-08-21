@@ -51,7 +51,7 @@ func add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// process and handle
-	_, err := s.Add(route)
+	_, err = s.Add(route)
 	// check if err is a duplicate constraint
 	if s.IsSQLErrDuplicateContraint(err) {
 		http.Error(w, "Key Exists", http.StatusBadRequest)
