@@ -29,7 +29,7 @@ Audit tables - optional - data store (would require additional storage OR could 
 Traffic log - optional - clickstream? so we can generate a most popular lookups and show traffic info
 
 Authentication and Authorization
-- abstracted authentication
+- abstracted authentication -- idea is we use istio to control our auth to the edit endpoints and pass appropriate headers back
 - allow everyone write access?  or set that at the start as everyone but have the placeholder in place to toggle?
 - default to a file or sqlite
 
