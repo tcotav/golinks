@@ -77,6 +77,15 @@ func TestAdd(t *testing.T) {
 		t.Error(err.Error())
 		return
 	}
+	_, err = s.Add(r)
+	if err != nil {
+		t.Log(err)
+	}
+	if !s.IsSQLErrDuplicateContraint(err) {
+		t.Error("Expected to fail on duplicate key")
+		return
+	}
+
 }
 func TestGet(t *testing.T) {
 	s, err := NewStore("sqlite", dbConn)

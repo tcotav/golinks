@@ -114,7 +114,7 @@ func (s *SQLStore) IsSQLErrDuplicateContraint(err error) bool {
 		// (1555) SQLITE_CONSTRAINT_PRIMARYKEY
 		// (2579) SQLITE_CONSTRAINT_ROWID
 		if driverErr, ok := err.(sqlite3.Error); ok {
-			if driverErr.ExtendedCode == 1555 || driverErr.ExtendedCode == 2579 {
+			if driverErr.Code == sqlite3.ErrConstraint {
 				return true
 			}
 		}
