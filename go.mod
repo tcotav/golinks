@@ -8,4 +8,5 @@ require (
 	github.com/hashicorp/golang-lru v0.5.4
 	github.com/mattn/go-sqlite3 v2.0.3+incompatible
 	github.com/spf13/viper v1.6.2
+	github.com/syndtr/goleveldb v1.0.0 // indirect
 )

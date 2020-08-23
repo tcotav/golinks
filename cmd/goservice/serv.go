@@ -33,16 +33,57 @@ type MsgReturn struct {
 	Message    string
 }
 
-func add(w http.ResponseWriter, r *http.Request) {
+func doAuthCheck(r *http.Request) bool {
 	if authRequired {
 		user := r.Header.Get(userAuthHeader)
-		team := r.Header.Get(teamAuthHeader)
-		if user == "" || team == "" {
-			http.Error(w, "You must be authenticated", http.StatusInternalServerError)
-			return
+		if user == "" {
+			return false
 		}
 	}
+	return true
+}
 
+func edit(w http.ResponseWriter, r *http.Request) {
+	user := r.Header.Get(userAuthHeader)
+	if !doAuthCheck(r) {
+		http.Error(w, "You must be authenticated", http.StatusInternalServerError)
+		return
+	}
+	var route routes.Route
+	// what to do in the case of conflict?
+	err := json.NewDecoder(r.Body).Decode(&route)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	route.Creator = user
+	route.LastModifiedBy = user
+
+	// process and handle
+	_, err = s.Add(route)
+	// check if err is a duplicate constraint
+	if s.IsSQLErrDuplicateContraint(err) {
+		http.Error(w, "Key Exists", http.StatusBadRequest)
+		return
+	} else if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("content-type", "application/json")
+	// return both lists
+	resp, _ := json.Marshal(MsgReturn{ReturnCode: http.StatusOK})
+	w.Write(resp)
+
+}
+
+func add(w http.ResponseWriter, r *http.Request) {
+	if !doAuthCheck(r) {
+		http.Error(w, "You must be authenticated", http.StatusInternalServerError)
+		return
+	}
 	var route routes.Route
 	// what to do in the case of conflict?
 	err := json.NewDecoder(r.Body).Decode(&route)
@@ -89,15 +130,7 @@ func getAllForTeam(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func edit(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	shortKey, ok := vars["short_key"]
-	if !ok {
-		http.Error(w, "Invalid url format", http.StatusInternalServerError)
-		return
-	}
 
-}
 
 func delete(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -110,6 +143,8 @@ func delete(w http.ResponseWriter, r *http.Request) {
 }
 */
 
+const randomStr = "random"
+
 func get(w http.ResponseWriter, r *http.Request) {
 	// format /{secretname}
 	vars := mux.Vars(r)
@@ -119,6 +154,7 @@ func get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// easter egg -- shortKey == random
 	URL, err := s.GetURL(shortKey)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -131,7 +167,7 @@ func get(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, URL, http.StatusFound)
 }
 
-var s *store.SQLStore
+var s *store.DataStore
 var authRequired bool
 
 func main() {
@@ -191,7 +227,7 @@ func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/{short_key}", get)
 	r.HandleFunc("/add/{secret}", add)
-	//r.HandleFunc("//{secret}", edit)
+	r.HandleFunc("/edit/{secret}", edit)
 	//r.HandleFunc("/s/{secret}", delete)
 	srv := &http.Server{
 		Handler:      r,

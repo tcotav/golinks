@@ -34,7 +34,19 @@ func init() {
 	}
 	// we do the setup of the database.  This probably wouldn't happen in RW code.
 	initStatements := []string{
-		"CREATE TABLE IF NOT EXISTS routes (id INTEGER PRIMARY KEY, short_key TEXT, url TEXT, creatorid int, teamid int, created_at datetime, modified_at datetime, last_modified_by int)",
+		"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, created_at datetime)",
+		"CREATE UNIQUE INDEX idx_users_name ON users(name)",
+		`CREATE TABLE IF NOT EXISTS routes (id INTEGER PRIMARY KEY, 
+			short_key TEXT, 
+			url TEXT,	
+			creatorid int, 
+			teamid int, 
+			created_at datetime, 
+			modified_at datetime, 
+			last_modified_by int,
+			FOREIGN KEY(creatorid) REFERENCES users(id),
+			FOREIGN KEY(last_modified_by) REFERENCES users(id)
+			)`,
 		"CREATE UNIQUE INDEX idx_short_key ON routes(short_key)",
 	}
 	for _, stmt := range initStatements {
@@ -50,7 +62,7 @@ func init() {
 			log.Fatal(err.Error())
 		}
 	}
-	r, err := routes.NewRoute("a", "http://www.google.com", 1, 1)
+	r, err := routes.NewRoute("a", "http://www.google.com", "t@t.com", "te@t.com")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -60,6 +72,35 @@ func init() {
 		log.Fatal(err)
 	}
 }
+
+func TestAddUser(t *testing.T) {
+	s, err := NewStore("sqlite", dbConn)
+	if err != nil {
+		// kill process because we won't have a DB anyway
+		t.Error(err.Error())
+		return
+	}
+	id, err := s.GetUserID("t@t.com")
+	if err != nil {
+		// kill process because we won't have a DB anyway
+		t.Error(err.Error())
+		return
+	}
+
+	// same username again, should get same id
+	id2, err := s.GetUserID("t@t.com")
+	if err != nil {
+		// kill process because we won't have a DB anyway
+		t.Error(err.Error())
+		return
+	}
+
+	if id != id2 {
+		t.Error("User IDs don't match for GetUserID")
+		return
+	}
+}
+
 func TestAdd(t *testing.T) {
 	s, err := NewStore("sqlite", dbConn)
 	if err != nil {
@@ -67,7 +108,7 @@ func TestAdd(t *testing.T) {
 		t.Error(err.Error())
 		return
 	}
-	r, err := routes.NewRoute("d", "http://www.google.com", 1, 1)
+	r, err := routes.NewRoute("d", "http://www.google.com", "t1@t.com", "te@t.com")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -87,6 +128,31 @@ func TestAdd(t *testing.T) {
 	}
 
 }
+
+func TestUpdate(t *testing.T) {
+	s, err := NewStore("sqlite", dbConn)
+	if err != nil {
+		// kill process because we won't have a DB anyway
+		t.Error(err.Error())
+		return
+	}
+	r, err := s.Get("a")
+	if err != nil {
+		t.Error(err.Error())
+		return
+	}
+
+	i, err := s.Modify(r)
+	if err != nil {
+		t.Error(err.Error())
+		return
+	}
+	if i != 1 {
+		t.Errorf("Unexpected rows modified -- expected 1 and got %d", i)
+		return
+	}
+}
+
 func TestGet(t *testing.T) {
 	s, err := NewStore("sqlite", dbConn)
 	if err != nil {

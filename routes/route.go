@@ -1,7 +1,9 @@
 package routes
 
 import (
+	"errors"
 	"net/url"
+	"regexp"
 	"time"
 )
 
@@ -17,25 +19,40 @@ import (
 
 // Route is
 type Route struct {
-	ShortKey         string
-	URL              string
-	CreatorID        int
-	TeamID           int
-	CreatedAt        time.Time
-	ModifiedAt       time.Time
-	LastModifiedByID int
+	ShortKey       string
+	URL            string
+	Creator        string
+	Team           string
+	CreatedAt      time.Time
+	ModifiedAt     time.Time
+	LastModifiedBy string
+}
+
+var emailRegex = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
+
+// isEmailValid checks if the email provided passes the required structure and length.
+func isEmailValid(e string) bool {
+	if len(e) < 3 && len(e) > 254 {
+		return false
+	}
+	return emailRegex.MatchString(e)
 }
 
 // NewRoute is a
-func NewRoute(k string, url string, creatorID int, teamID int) (Route, error) {
+func NewRoute(k string, url string, creator string, team string) (Route, error) {
 	now := time.Now()
 	err := isValidURL(url)
 	if err != nil {
 		return Route{}, err
 	}
-
-	return Route{ShortKey: k, URL: url, CreatorID: creatorID, TeamID: teamID,
-		CreatedAt: now, ModifiedAt: now, LastModifiedByID: creatorID}, nil
+	if !isEmailValid(creator) {
+		return Route{}, errors.New("Invalid or bad format creator email address")
+	}
+	if team != "" && !isEmailValid(team) { // allow blank team
+		return Route{}, errors.New("Invalid or bad format team email address")
+	}
+	return Route{ShortKey: k, URL: url, Creator: creator, Team: team,
+		CreatedAt: now, ModifiedAt: now, LastModifiedBy: creator}, nil
 }
 
 // isValidURL is

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
@@ -19,35 +20,70 @@ import (
 // Store is the data structure wrapping the underlying database interactions.  It contains
 // the handle to the database, i.e. the database handle representing a pool of zero or
 // more underlying connections.
-type SQLStore struct {
+type DataStore struct {
 	dbtype string
 	db     *sql.DB
 	cache  *lru.Cache
 }
 
 var (
-	sharedStore *SQLStore = &SQLStore{}
+	sharedStore *DataStore = &DataStore{}
 )
 
 // NewStore is the constructor for the Store struct and does the actual work of creating the DB handler.
-func NewStore(dbtype string, dbConn *sql.DB) (*SQLStore, error) {
-	if (SQLStore{}) != *sharedStore { // did we init store already
+func NewStore(dbtype string, dbConn *sql.DB) (*DataStore, error) {
+	if (DataStore{}) != *sharedStore { // did we init store already
 		return sharedStore, nil // if so, hand it back
 	}
 	cache, _ := lru.New(500)
-	sharedStore = &SQLStore{dbtype: dbtype, db: dbConn, cache: cache}
+	sharedStore = &DataStore{dbtype: dbtype, db: dbConn, cache: cache}
 	// end database setup
 	return sharedStore, nil
 }
 
-const insertSQL = "INSERT INTO routes(short_key, url, creatorid, teamid, created_at, modified_at, last_modified_by) VALUES (?,?,?,?,?,?,?)"
+const insertRoute = "INSERT INTO routes(short_key, url, creatorid, teamid, created_at, modified_at, last_modified_by) VALUES (?,?,?,?,?,?,?)"
+const insertUser = "INSERT INTO users(name, created_at) VALUES(?,?)"
+const getUser = "SELECT id FROM users where name = ?"
 
-func (s *SQLStore) Add(r routes.Route) (int, error) {
-	stmt, err := s.db.Prepare(insertSQL)
+func (s *DataStore) GetUserID(username string) (int, error) {
+	// create or get
+	rows, err := s.db.Query(getUser, username)
 	if err != nil {
 		return -1, err
 	}
-	res, err := stmt.Exec(r.ShortKey, r.URL, r.CreatorID, r.TeamID, r.CreatedAt, r.ModifiedAt, r.LastModifiedByID)
+	defer rows.Close()
+
+	var userID int
+	for rows.Next() {
+		err := rows.Scan(&userID)
+		if err != nil {
+			return -1, err
+		}
+		return userID, nil
+	}
+
+	now := time.Now()
+	stmt, err := s.db.Prepare(insertUser)
+	if err != nil {
+		return -1, err
+	}
+	res, err := stmt.Exec(username, now)
+	if err != nil {
+		return -1, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return -1, err
+	}
+	return int(id), nil
+
+}
+func (s *DataStore) Add(r routes.Route) (int, error) {
+	stmt, err := s.db.Prepare(insertRoute)
+	if err != nil {
+		return -1, err
+	}
+	res, err := stmt.Exec(r.ShortKey, r.URL, r.Creator, r.Team, r.CreatedAt, r.ModifiedAt, r.LastModifiedBy)
 	if err != nil {
 		return -1, err
 	}
@@ -58,10 +94,16 @@ func (s *SQLStore) Add(r routes.Route) (int, error) {
 	return int(affect), nil
 }
 
+func (s *DataStore) GetRandomURL(k string) (routes.Route, error) {
+	// get count of rows in url list
+	//
+	return routes.Route{}, nil
+}
+
 const getRouteSQL = "SELECT short_key, url, creatorid, teamid, created_at, modified_at, last_modified_by FROM routes where short_key = ?"
 
 // Get is
-func (s *SQLStore) Get(k string) (routes.Route, error) {
+func (s *DataStore) Get(k string) (routes.Route, error) {
 	rows, err := s.db.Query(getRouteSQL, k)
 	if err != nil {
 		return routes.Route{}, err
@@ -70,7 +112,7 @@ func (s *SQLStore) Get(k string) (routes.Route, error) {
 
 	var r routes.Route
 	for rows.Next() {
-		err := rows.Scan(&r.ShortKey, &r.URL, &r.CreatorID, &r.TeamID, &r.ModifiedAt, &r.LastModifiedByID)
+		err := rows.Scan(&r.ShortKey, &r.URL, &r.Creator, &r.Team, &r.CreatedAt, &r.ModifiedAt, &r.LastModifiedBy)
 		if err != nil {
 			return routes.Route{}, err
 		}
@@ -81,7 +123,7 @@ func (s *SQLStore) Get(k string) (routes.Route, error) {
 
 const getURLSQL = "SELECT  url FROM routes where short_key = ?"
 
-func (s *SQLStore) GetURL(k string) (string, error) {
+func (s *DataStore) GetURL(k string) (string, error) {
 	// check local cache
 	v, ok := s.cache.Get(k)
 	if ok {
@@ -108,7 +150,33 @@ func (s *SQLStore) GetURL(k string) (string, error) {
 	return "", errors.New("No match found")
 }
 
-func (s *SQLStore) IsSQLErrDuplicateContraint(err error) bool {
+const updateURLSQL = "UPDATE routes SET url=?, last_modified_by=?, modified_at=? where short_key = ?"
+
+func (s *DataStore) Modify(r routes.Route) (int, error) {
+	now := time.Now()
+	userID, err := s.GetUserID(r.LastModifiedBy)
+	if err != nil {
+		return -1, err
+	}
+	res, err := s.db.Exec(updateURLSQL, r.URL, now, userID, r.ShortKey)
+	if err != nil {
+		return -1, err
+	}
+	affect, err := res.RowsAffected()
+	if err != nil {
+		return -1, err
+	}
+	// update the cache
+	// is it in the cache
+	// if it is, change the url
+	if _, ok := s.cache.Get(r.ShortKey); !ok {
+		s.cache.Remove(r.ShortKey)
+		s.cache.Add(r.ShortKey, r.URL)
+	}
+	return int(affect), nil
+}
+
+func (s *DataStore) IsSQLErrDuplicateContraint(err error) bool {
 
 	if s.dbtype == "sqlite" {
 		// (1555) SQLITE_CONSTRAINT_PRIMARYKEY
@@ -132,10 +200,7 @@ func (s *SQLStore) IsSQLErrDuplicateContraint(err error) bool {
 	return false
 }
 
-func (s *SQLStore) Modify(routes.Route) error {
-	return nil
-}
-func (s *SQLStore) Delete(string) bool {
+func (s *DataStore) Delete(string) bool {
 	return false
 }
 
