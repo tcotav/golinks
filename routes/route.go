@@ -1,7 +1,9 @@
 package routes
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"time"
@@ -19,19 +21,21 @@ import (
 
 // Route is
 type Route struct {
-	ShortKey       string
-	URL            string
-	Creator        string
-	Team           string
-	CreatedAt      time.Time
-	ModifiedAt     time.Time
-	LastModifiedBy string
+	ShortKey       string    `json:"shortkey"`
+	URL            string    `json:"url"`
+	Creator        string    `json:"creator"`
+	Team           string    `json:"team,omitempty"`
+	CreatedAt      time.Time `json:"createdat,omitempty"`
+	ModifiedAt     time.Time `json:"modifiedat,omitempty"`
+	LastModifiedBy string    `json:"lastmodifiedby,omitempty"`
 }
 
-var emailRegex = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
+// naive email regex
+var emailRegex = regexp.MustCompile("^\\w+([\\.-]?\\w+)*@\\w+([\\.-]?\\w+)*(\\.\\w{2,3})+$")
 
 // isEmailValid checks if the email provided passes the required structure and length.
 func isEmailValid(e string) bool {
+	fmt.Println(e)
 	if len(e) < 3 && len(e) > 254 {
 		return false
 	}
@@ -48,7 +52,7 @@ func NewRoute(k string, url string, creator string, team string) (Route, error) 
 	if !isEmailValid(creator) {
 		return Route{}, errors.New("Invalid or bad format creator email address")
 	}
-	if team != "" && !isEmailValid(team) { // allow blank team
+	if !isEmailValid(team) { // allow blank team
 		return Route{}, errors.New("Invalid or bad format team email address")
 	}
 	return Route{ShortKey: k, URL: url, Creator: creator, Team: team,
@@ -67,5 +71,59 @@ func isValidURL(testURL string) error {
 		return err
 	}
 
+	return nil
+}
+
+func (r *Route) UnmarshalJSON(body []byte) (err error) {
+	// here we declare a local type, unmarshal data into it, and then convert back to desired type
+	// in order to avoid a stack overflow with Decode/Unmarshal
+	//
+	// https://stackoverflow.com/questions/34859449/unmarshaljson-results-in-stack-overflow
+	//
+	type localr Route
+	rLocal := localr{}
+	if err := json.Unmarshal(body, &rLocal); err != nil {
+		return err
+	}
+
+	route := Route(rLocal)
+	r.ShortKey = route.ShortKey
+
+	// expect valid url
+	r.URL = route.URL
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+
+	// expect valid dates
+	r.CreatedAt = route.CreatedAt
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = now
+	}
+	r.ModifiedAt = route.ModifiedAt
+	if r.ModifiedAt.IsZero() {
+		r.ModifiedAt = now
+	}
+
+	// expect valid email addresses
+	r.Creator = route.Creator
+	if !isEmailValid(r.Creator) {
+		return fmt.Errorf("Invalid or bad format creator email address, %s", r.Creator)
+	}
+
+	r.LastModifiedBy = route.LastModifiedBy
+	if r.LastModifiedBy == "" {
+		r.LastModifiedBy = r.Creator
+	} else if !isEmailValid(r.LastModifiedBy) {
+		return fmt.Errorf("Invalid or bad format lastmodified by email address, %s", r.LastModifiedBy)
+	}
+	r.Team = route.Team
+	if r.Team == "" {
+		r.Team = r.Creator
+	} else if !isEmailValid(r.Team) { // allow blank team
+		return fmt.Errorf("Invalid or bad format team by email address, %s", r.Team)
+	}
 	return nil
 }
