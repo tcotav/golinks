@@ -25,7 +25,6 @@ func logLine(rPointer []byte, remoteAddr string, requestURI string,
 }
 
 const userAuthHeader = "UserNameAuth"
-const teamAuthHeader = "TeamNameAuth"
 
 type MsgReturn struct {
 	ReturnCode int
@@ -45,6 +44,7 @@ func doAuthCheck(r *http.Request) bool {
 
 func edit(w http.ResponseWriter, r *http.Request) {
 	user := r.Header.Get(userAuthHeader)
+
 	if !doAuthCheck(r) {
 		http.Error(w, "You must be authenticated", http.StatusInternalServerError)
 		return
