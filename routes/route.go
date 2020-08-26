@@ -35,7 +35,6 @@ var emailRegex = regexp.MustCompile("^\\w+([\\.-]?\\w+)*@\\w+([\\.-]?\\w+)*(\\.\
 
 // isEmailValid checks if the email provided passes the required structure and length.
 func isEmailValid(e string) bool {
-	fmt.Println(e)
 	if len(e) < 3 && len(e) > 254 {
 		return false
 	}
