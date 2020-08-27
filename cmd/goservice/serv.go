@@ -9,6 +9,7 @@ import (
 	"time"
 
 	// database driver for sql package
+	"github.com/go-redis/redis"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
@@ -63,10 +64,7 @@ func edit(w http.ResponseWriter, r *http.Request) {
 	// process and handle
 	_, err = s.Add(route)
 	// check if err is a duplicate constraint
-	if s.IsSQLErrDuplicateContraint(err) {
-		http.Error(w, "Key Exists", http.StatusBadRequest)
-		return
-	} else if err != nil {
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -94,10 +92,7 @@ func add(w http.ResponseWriter, r *http.Request) {
 	// process and handle
 	_, err = s.Add(route)
 	// check if err is a duplicate constraint
-	if s.IsSQLErrDuplicateContraint(err) {
-		http.Error(w, "Key Exists", http.StatusBadRequest)
-		return
-	} else if err != nil {
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -145,6 +140,8 @@ func delete(w http.ResponseWriter, r *http.Request) {
 
 const randomStr = "random"
 
+//
+// get is the main function -- responding to http://go/<key> with a redirect to the desired page
 func get(w http.ResponseWriter, r *http.Request) {
 	// format /{secretname}
 	vars := mux.Vars(r)
@@ -167,6 +164,31 @@ func get(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, URL, http.StatusFound)
 }
 
+func delete(w http.ResponseWriter, r *http.Request) {
+	// format /{secretname}
+	vars := mux.Vars(r)
+	shortKey, ok := vars["short_key"]
+	if !ok {
+		http.Error(w, "Invalid url format", http.StatusInternalServerError)
+		return
+	}
+
+	// easter egg -- shortKey == random
+	err := s.Delete(shortKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		logLine([]byte(fmt.Sprintf("%p", r)), r.RemoteAddr, r.RequestURI, shortKey, http.StatusNotFound)
+		return
+	}
+
+	// TODO need to send a redirect here
+	logLine([]byte(fmt.Sprintf("%p", r)), r.RemoteAddr, r.RequestURI, shortKey, http.StatusOK)
+
+	w.WriteHeader(http.StatusOK)
+	// return both lists
+	w.Write([]byte("OK"))
+}
+
 var s *store.DataStore
 var authRequired bool
 
@@ -182,6 +204,7 @@ func main() {
 	viper.SetDefault("datastore.use", "sqlite")
 	viper.SetDefault("datastore.sqlite.drivername", "sqlite3")
 	viper.SetDefault("datastore.sqlite.path", "./testdb")
+	viper.SetDefault("cache.redis.ttl", 21600)
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
@@ -218,7 +241,19 @@ func main() {
 		log.Fatal("Check config -- unknown db type set")
 	}
 
-	s, err = store.NewStore(useDB, database)
+	cacheType := viper.GetString("cache.use")
+	ttl := -1
+
+	var redisClient *redis.Client
+	if cacheType == "remote" {
+		ttl = viper.GetInt("cache.redis.ttl")
+		redisClient = redis.NewClient(&redis.Options{
+			Addr:     viper.GetString("cache.redis.host"),
+			Password: viper.GetString("cache.redis.password"),
+		})
+	}
+
+	s, err = store.GetStore(useDB, database, redisClient, ttl)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		log.Fatal(err.Error())
@@ -228,7 +263,7 @@ func main() {
 	r.HandleFunc("/{short_key}", get)
 	r.HandleFunc("/add/{secret}", add)
 	r.HandleFunc("/edit/{secret}", edit)
-	//r.HandleFunc("/s/{secret}", delete)
+	r.HandleFunc("/delete/{secret}", delete)
 	srv := &http.Server{
 		Handler:      r,
 		Addr:         fmt.Sprintf("%s:%s", listenAddress, listenPort),

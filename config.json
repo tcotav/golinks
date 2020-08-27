@@ -15,10 +15,11 @@
         }
     },
     "cache":{
+        "use":"local",
         "redis":{
             "host":"",
-            "user":"",
-            "pass":""
+            "pass":"",
+            "ttl":21600
         }
     }
 }

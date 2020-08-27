@@ -6,6 +6,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/alicebob/miniredis"
+	"github.com/go-redis/redis"
 	"github.com/tcotav/golinks/routes"
 )
 
@@ -27,7 +29,7 @@ func init() {
 	}
 
 	// really we could/should use a shared STORE for this whole thing, but...
-	s, err := NewStore("sqlite", dbConn)
+	s, err := GetStore("sqlite", dbConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		log.Fatal(err.Error())
@@ -62,7 +64,7 @@ func init() {
 			log.Fatal(err.Error())
 		}
 	}
-	r, err := routes.NewRoute("a", "http://www.google.com", "t@t.com", "te@t.com")
+	r, err := routes.NewRoute("a", "http://www.google.com", "t@t.com", "team@t.com")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -74,7 +76,7 @@ func init() {
 }
 
 func TestAddUser(t *testing.T) {
-	s, err := NewStore("sqlite", dbConn)
+	s, err := GetStore("sqlite", dbConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
@@ -82,27 +84,22 @@ func TestAddUser(t *testing.T) {
 	}
 	id, err := s.GetUserID("t@t.com")
 	if err != nil {
-		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
-		return
 	}
 
 	// same username again, should get same id
 	id2, err := s.GetUserID("t@t.com")
 	if err != nil {
-		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
-		return
 	}
 
 	if id != id2 {
 		t.Error("User IDs don't match for GetUserID")
-		return
 	}
 }
 
 func TestAdd(t *testing.T) {
-	s, err := NewStore("sqlite", dbConn)
+	s, err := GetStore("sqlite", dbConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
@@ -110,7 +107,8 @@ func TestAdd(t *testing.T) {
 	}
 	r, err := routes.NewRoute("d", "http://www.google.com", "t1@t.com", "te@t.com")
 	if err != nil {
-		log.Fatal(err)
+		t.Error(err.Error())
+		return
 	}
 
 	i, err := s.Add(r)
@@ -119,18 +117,44 @@ func TestAdd(t *testing.T) {
 		return
 	}
 	_, err = s.Add(r)
-	if err != nil {
-		t.Log(err)
+	if !s.IsSQLErrUniqueContraint(err) {
+		t.Error(err.Error())
 	}
-	if !s.IsSQLErrDuplicateContraint(err) {
-		t.Error("Expected to fail on duplicate key")
+}
+
+func TestDelete(t *testing.T) {
+	s, err := GetStore("sqlite", dbConn, nil, -1)
+	if err != nil {
+		// kill process because we won't have a DB anyway
+		t.Error(err.Error())
+		return
+	}
+	r, err := routes.NewRoute("q", "http://www.google.com", "t1@t.com", "te@t.com")
+	if err != nil {
+		t.Error(err.Error())
 		return
 	}
 
+	i, err := s.Add(r)
+	if err != nil && i != 1 {
+		t.Error(err.Error())
+		return
+	}
+	err = s.Delete("q")
+	if err != nil {
+		t.Error(err.Error())
+	}
+	r, err = s.Get("q")
+	if err != nil {
+		e := err.Error()
+		if e != "No match found" {
+			t.Error(err.Error())
+		}
+	}
 }
 
 func TestUpdate(t *testing.T) {
-	s, err := NewStore("sqlite", dbConn)
+	s, err := GetStore("sqlite", dbConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
@@ -154,7 +178,7 @@ func TestUpdate(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	s, err := NewStore("sqlite", dbConn)
+	s, err := GetStore("sqlite", dbConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
@@ -167,6 +191,80 @@ func TestGet(t *testing.T) {
 	}
 	if v != "http://www.google.com" {
 		t.Error("Expected: val1, got: ", v)
+	}
+}
+
+func TestRedis(t *testing.T) {
+
+	redisServer, err := miniredis.Run()
+	if err != nil {
+		panic(err)
+	}
+	defer redisServer.Close()
+
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: redisServer.Addr(),
+	})
+
+	// NewStore is too smart so we have to force it
+	s, err := NewStore("sqlite", dbConn, redisClient, 300)
+	if err != nil {
+		// kill process because we won't have a DB anyway
+		t.Error(err.Error())
+		return
+	}
+	r, err := routes.NewRoute("x", "http://www.google.com", "t1@t.com", "te@t.com")
+	if err != nil {
+		t.Error(err.Error())
+		return
+	}
+	i, err := s.Add(r)
+	if err != nil && i != 1 {
+		t.Error(err.Error())
+		return
+	}
+	v, err := s.GetURL("x")
+	if err != nil {
+		t.Error(err.Error())
+	}
+	if v != "http://www.google.com" {
+		t.Error("Expected: val1, got: ", v)
+	}
+
+	v2 := "http://www.t.com"
+	r.URL = v2
+	i, err = s.Modify(r)
+	if err != nil {
+		t.Error(err.Error())
+	}
+	if i != 1 {
+		t.Errorf("Unexpected rows modified -- expected 1 and got %d", i)
+	}
+	v, err = s.GetURL("x")
+	if err != nil {
+		t.Error(err.Error())
+	}
+	if v != v2 {
+		t.Error("Expected does not match found : ", v2, v)
+	}
+	r, err = s.Get("x")
+	if err != nil {
+		t.Error(err.Error())
+	}
+	if r.URL != v2 {
+		t.Error("Expected does not match found : ", v2, r.URL)
+	}
+
+	err = s.Delete("x")
+	if err != nil {
+		t.Error(err.Error())
+	}
+	r, err = s.Get("x")
+	if err != nil {
+		e := err.Error()
+		if e != "No match found" {
+			t.Error(err.Error())
+		}
 	}
 }
 
