@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, created_at datetime);
+CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, isadmin int, created_at datetime);
 CREATE UNIQUE INDEX idx_users_name ON users(name);
 CREATE TABLE IF NOT EXISTS routes (id INTEGER PRIMARY KEY, 
 			short_key TEXT, 
@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS routes (id INTEGER PRIMARY KEY,
 			created_at datetime, 
 			modified_at datetime, 
 			last_modified_by int,
+			locked int default 0, -- 0 means unlocked, 1 is locked
 			FOREIGN KEY(creatorid) REFERENCES users(id),
 			FOREIGN KEY(last_modified_by) REFERENCES users(id)
 			);

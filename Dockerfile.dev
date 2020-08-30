@@ -1,0 +1,14 @@
+FROM golang:alpine as builder
+
+WORKDIR /app
+
+COPY . .
+
+ENV GO111MODULE=on
+# statically link our binary so we can pop it into an empty container CGO_ENABLED=0
+#
+# and of course my first example... can't run CGO_ENABLED=0 because sqlite breaks
+# still try with 0 first
+# only switch to this if you need MOAR cross-compilation of your static binary
+RUN apk add build-base mysql-client
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o goservice /app/cmd/goservice/serv.go

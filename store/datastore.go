@@ -53,49 +53,134 @@ func NewStore(dbtype string, dbConn *sql.DB, redisClient *redis.Client, redisTTL
 	return newStore, nil
 }
 
-const insertRoute = "INSERT INTO routes(short_key, url, creatorid, teamid, created_at, modified_at, last_modified_by) VALUES (?,?,?,?,?,?,?)"
-const insertUser = "INSERT INTO users(name, created_at) VALUES(?,?)"
-const getUser = "SELECT id FROM users where name = ?"
-
-func (s *DataStore) GetUserID(username string) (int, error) {
+func (s *DataStore) GetUser(username string) (*User, error) {
 	// create or get
-	rows, err := s.db.Query(getUser, username)
+	rows, err := s.db.Query(GetSQL(s.dbtype, "getUser"), username)
 	if err != nil {
-		return -1, err
+		return &User{}, err
 	}
 	defer rows.Close()
 
-	var userID int
+	var user User
 	for rows.Next() {
-		err := rows.Scan(&userID)
+		err := rows.Scan(&user.ID, &user.Name, &user.IsAdmin)
 		if err != nil {
-			return -1, err
+			return &User{}, err
 		}
-		return userID, nil
+		return &user, nil
 	}
 
 	now := time.Now()
-	stmt, err := s.db.Prepare(insertUser)
+	stmt, err := s.db.Prepare(GetSQL(s.dbtype, "insertUser"))
 	if err != nil {
-		return -1, err
+		return &User{}, err
 	}
-	res, err := stmt.Exec(username, now)
+	res, err := stmt.Exec(username, now, 0)
 	if err != nil {
-		return -1, err
+		return &User{}, err
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return -1, err
+		return &User{}, err
 	}
-	return int(id), nil
+	return &User{ID: int(id), Name: username}, nil
 
 }
-func (s *DataStore) Add(r routes.Route) (int, error) {
-	stmt, err := s.db.Prepare(insertRoute)
+
+func (s *DataStore) DumpAllRoutes() ([]routes.Route, error) {
+	rows, err := s.db.Query(GetSQL(s.dbtype, "getAllRoutes"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var r routes.Route
+	routeList := make([]routes.Route, 0)
+	for rows.Next() {
+		err := rows.Scan(&r.ShortKey, &r.URL, &r.Creator, &r.Team, &r.LastModifiedBy)
+		if err != nil {
+			return nil, err
+		}
+		routeList = append(routeList, r)
+	}
+	return routeList, nil
+}
+
+func (s *DataStore) GetAllUsers() error {
+	rows, err := s.db.Query(GetSQL(s.dbtype, "getAllUsers"))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var user User
+	for rows.Next() {
+		err := rows.Scan(&user.ID, &user.Name, &user.IsAdmin)
+		if err != nil {
+			return err
+		}
+		fmt.Println(user)
+	}
+	return nil
+}
+
+func (s *DataStore) MakeAdmin(username string, admin string) (int, error) {
+	// is admin authorized to do this?
+	adminUser, err := s.GetUser(admin)
 	if err != nil {
 		return -1, err
 	}
-	res, err := stmt.Exec(r.ShortKey, r.URL, r.Creator, r.Team, r.CreatedAt, r.ModifiedAt, r.LastModifiedBy)
+	if adminUser.IsAdmin != 1 {
+		return -1, fmt.Errorf("%s is not an admin, makeadmin called failed.", admin)
+	}
+
+	u, err := s.GetUser(username)
+	if err != nil {
+		return -1, err
+	}
+	now := time.Now().Format(routes.TimeFormat)
+	res, err := s.db.Exec(GetSQL(s.dbtype, "makeUserAdmin"), now, adminUser.ID, u.ID)
+	if err != nil {
+		return -1, err
+	}
+	affect, err := res.RowsAffected()
+	if err != nil {
+		return -1, err
+	}
+	return int(affect), nil
+}
+
+// Lock locks the entry so that it requires admin to unlock and change
+func (s *DataStore) Lock(r routes.Route) (int, error) {
+	now := time.Now()
+	user, err := s.GetUser(r.LastModifiedBy)
+	if err != nil {
+		return -1, err
+	}
+	if user.IsAdmin != 1 {
+		return -1, fmt.Errorf("User %s is not admin", user.Name)
+	}
+	res, err := s.db.Exec(GetSQL(s.dbtype, "updateURLLock"), user.ID, now, r.ShortKey)
+	if err != nil {
+		return -1, err
+	}
+	affect, err := res.RowsAffected()
+	if err != nil {
+		return -1, err
+	}
+	return int(affect), nil
+}
+
+func (s *DataStore) Add(r routes.Route) (int, error) {
+	stmt, err := s.db.Prepare(GetSQL(s.dbtype, "insertRoute"))
+	if err != nil {
+		return -1, err
+	}
+	u, err := s.GetUser(r.Creator)
+	if err != nil {
+		return -1, err
+	}
+	res, err := stmt.Exec(r.ShortKey, r.URL, u.ID, r.Team, r.CreatedAt, r.ModifiedAt, u.ID)
 	if err != nil {
 		return -1, err
 	}
@@ -112,11 +197,9 @@ func (s *DataStore) GetRandomURL(k string) (routes.Route, error) {
 	return routes.Route{}, nil
 }
 
-const getRouteSQL = "SELECT short_key, url, creatorid, teamid, created_at, modified_at, last_modified_by FROM routes where short_key = ?"
-
 // Get is
 func (s *DataStore) Get(k string) (routes.Route, error) {
-	rows, err := s.db.Query(getRouteSQL, k)
+	rows, err := s.db.Query(GetSQL(s.dbtype, "getRouteSQL"), k)
 	if err != nil {
 		return routes.Route{}, err
 	}
@@ -124,7 +207,7 @@ func (s *DataStore) Get(k string) (routes.Route, error) {
 
 	var r routes.Route
 	for rows.Next() {
-		err := rows.Scan(&r.ShortKey, &r.URL, &r.Creator, &r.Team, &r.CreatedAt, &r.ModifiedAt, &r.LastModifiedBy)
+		err := rows.Scan(&r.ShortKey, &r.URL, &r.CreatedAt, &r.Creator, &r.Team, &r.ModifiedAt, &r.LastModifiedBy)
 		if err != nil {
 			return routes.Route{}, err
 		}
@@ -132,8 +215,6 @@ func (s *DataStore) Get(k string) (routes.Route, error) {
 	}
 	return routes.Route{}, errors.New("No match found")
 }
-
-const getURLSQL = "SELECT  url FROM routes where short_key = ?"
 
 func (s *DataStore) GetURL(k string) (string, error) {
 	// check local cache
@@ -151,7 +232,7 @@ func (s *DataStore) GetURL(k string) (string, error) {
 	}
 
 	// then database
-	rows, err := s.db.Query(getURLSQL, k)
+	rows, err := s.db.Query(GetSQL(s.dbtype, "getURLSQL"), k)
 	if err != nil {
 		return "", err
 	}
@@ -175,16 +256,36 @@ func (s *DataStore) GetURL(k string) (string, error) {
 	return "", errors.New("No match found")
 }
 
-const updateURLSQL = "UPDATE routes SET url=?, last_modified_by=?, modified_at=? where short_key = ?"
-
 func (s *DataStore) Modify(r routes.Route) (int, error) {
 	// what about case where we are changing the shortkey -- how to invalidate caches?
-	now := time.Now()
-	userID, err := s.GetUserID(r.LastModifiedBy)
+	now := time.Now().Format(routes.TimeFormat)
+	user, err := s.GetUser(r.LastModifiedBy)
 	if err != nil {
 		return -1, err
 	}
-	res, err := s.db.Exec(updateURLSQL, r.URL, now, userID, r.ShortKey)
+
+	// double check the lock status of the key in question before we move on
+	// then database
+	rows, err := s.db.Query(GetSQL(s.dbtype, "getURLIsLocked"), r.ShortKey)
+	if err != nil {
+		return -1, err
+	}
+	defer rows.Close()
+	var isLocked int
+	for rows.Next() {
+		err := rows.Scan(&isLocked)
+		if err != nil {
+			return -1, err
+		}
+	}
+
+	// exit if not allowed in
+	if isLocked == 1 && user.IsAdmin != 1 {
+		return -1, fmt.Errorf("User %s is not admin", user.Name)
+	}
+
+	// then move on
+	res, err := s.db.Exec(GetSQL(s.dbtype, "updateURLSQL"), r.URL, user.ID, now, r.ShortKey)
 	if err != nil {
 		return -1, err
 	}
@@ -206,11 +307,9 @@ func (s *DataStore) Modify(r routes.Route) (int, error) {
 	return int(affect), nil
 }
 
-const deleteRouteSQL = "DELETE FROM routes where short_key = ?"
-
 func (s *DataStore) Delete(k string) error {
 	// what about case where we are changing the shortkey -- how to invalidate caches?
-	res, err := s.db.Exec(deleteRouteSQL, k)
+	res, err := s.db.Exec(GetSQL(s.dbtype, "deleteRouteSQL"), k)
 	if err != nil {
 		return err
 	}
@@ -248,7 +347,7 @@ func (s *DataStore) IsSQLErrUniqueContraint(err error) bool {
 		// 1062 duplicate key
 		//
 		if driverErr, ok := err.(*mysql.MySQLError); ok {
-			if driverErr.Number == 1062 {
+			if driverErr.Number == 1169 || driverErr.Number == 1062 {
 				return true
 			}
 		}

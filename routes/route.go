@@ -18,17 +18,20 @@ import (
 - modified_at - date last modified
 - last_modified_by - user last modified key
 */
-
 // Route is
 type Route struct {
-	ShortKey       string    `json:"shortkey"`
-	URL            string    `json:"url"`
-	Creator        string    `json:"creator"`
-	Team           string    `json:"team,omitempty"`
-	CreatedAt      time.Time `json:"createdat,omitempty"`
-	ModifiedAt     time.Time `json:"modifiedat,omitempty"`
-	LastModifiedBy string    `json:"lastmodifiedby,omitempty"`
+	ID             int    `json:"id, omitempty"`
+	ShortKey       string `json:"shortkey"`
+	URL            string `json:"url"`
+	Creator        string `json:"creator"`
+	Team           string `json:"team,omitempty"`
+	CreatedAt      string `json:"createdat,omitempty"`
+	ModifiedAt     string `json:"modifiedat,omitempty"`
+	LastModifiedBy string `json:"lastmodifiedby,omitempty"`
+	Locked         int    `json:"locked"` // we will have some entries that will require elevated privs to change
 }
+
+const TimeFormat string = "2006-01-02 15:04:05"
 
 // naive email regex
 var emailRegex = regexp.MustCompile("^\\w+([\\.-]?\\w+)*@\\w+([\\.-]?\\w+)*(\\.\\w{2,3})+$")
@@ -43,7 +46,8 @@ func isEmailValid(e string) bool {
 
 // NewRoute is a
 func NewRoute(k string, url string, creator string, team string) (Route, error) {
-	now := time.Now()
+	now := time.Now().Format(TimeFormat)
+
 	err := isValidURL(url)
 	if err != nil {
 		return Route{}, err
@@ -94,15 +98,15 @@ func (r *Route) UnmarshalJSON(body []byte) (err error) {
 		return err
 	}
 
-	now := time.Now()
+	now := time.Now().Format(TimeFormat)
 
 	// expect valid dates
 	r.CreatedAt = route.CreatedAt
-	if r.CreatedAt.IsZero() {
+	if r.CreatedAt == "" {
 		r.CreatedAt = now
 	}
 	r.ModifiedAt = route.ModifiedAt
-	if r.ModifiedAt.IsZero() {
+	if r.ModifiedAt == "" {
 		r.ModifiedAt = now
 	}
 

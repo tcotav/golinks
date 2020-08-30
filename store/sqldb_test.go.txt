@@ -23,20 +23,20 @@ func init() {
 
 	var err error
 	// create a shared connection
-	dbConn, err = sql.Open("sqlite3", testDB)
+	mysqlConn, err = sql.Open("sqlite3", testDB)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
 
 	// really we could/should use a shared STORE for this whole thing, but...
-	s, err := GetStore("sqlite", dbConn, nil, -1)
+	s, err := GetStore("sqlite", mysqlConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		log.Fatal(err.Error())
 	}
 	// we do the setup of the database.  This probably wouldn't happen in RW code.
 	initStatements := []string{
-		"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, created_at datetime)",
+		"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, isadmin int, created_at datetime)",
 		"CREATE UNIQUE INDEX idx_users_name ON users(name)",
 		`CREATE TABLE IF NOT EXISTS routes (id INTEGER PRIMARY KEY, 
 			short_key TEXT, 
@@ -46,6 +46,7 @@ func init() {
 			created_at datetime, 
 			modified_at datetime, 
 			last_modified_by int,
+			locked int default 0,
 			FOREIGN KEY(creatorid) REFERENCES users(id),
 			FOREIGN KEY(last_modified_by) REFERENCES users(id)
 			)`,
@@ -53,7 +54,7 @@ func init() {
 	}
 	for _, stmt := range initStatements {
 
-		statement, err := dbConn.Prepare(stmt)
+		statement, err := mysqlConn.Prepare(stmt)
 		if err != nil {
 			// kill process because we won't have a DB anyway
 			log.Fatal(err.Error())
@@ -76,30 +77,30 @@ func init() {
 }
 
 func TestAddUser(t *testing.T) {
-	s, err := GetStore("sqlite", dbConn, nil, -1)
+	s, err := GetStore("sqlite", mysqlConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
 		return
 	}
-	id, err := s.GetUserID("t@t.com")
+	u, err := s.GetUser("t@t.com")
 	if err != nil {
 		t.Error(err.Error())
 	}
 
 	// same username again, should get same id
-	id2, err := s.GetUserID("t@t.com")
+	u2, err := s.GetUser("t@t.com")
 	if err != nil {
 		t.Error(err.Error())
 	}
 
-	if id != id2 {
+	if u.ID != u2.ID {
 		t.Error("User IDs don't match for GetUserID")
 	}
 }
 
 func TestAdd(t *testing.T) {
-	s, err := GetStore("sqlite", dbConn, nil, -1)
+	s, err := GetStore("sqlite", mysqlConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
@@ -123,7 +124,7 @@ func TestAdd(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	s, err := GetStore("sqlite", dbConn, nil, -1)
+	s, err := GetStore("sqlite", mysqlConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
@@ -154,7 +155,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestUpdate(t *testing.T) {
-	s, err := GetStore("sqlite", dbConn, nil, -1)
+	s, err := GetStore("sqlite", mysqlConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
@@ -178,7 +179,7 @@ func TestUpdate(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	s, err := GetStore("sqlite", dbConn, nil, -1)
+	s, err := GetStore("sqlite", mysqlConn, nil, -1)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
@@ -194,6 +195,74 @@ func TestGet(t *testing.T) {
 	}
 }
 
+func TestAdmin(t *testing.T) {
+	s, err := GetStore("sqlite", mysqlConn, nil, -1)
+	if err != nil {
+		// kill process because we won't have a DB anyway
+		t.Error(err.Error())
+		return
+	}
+
+	// create route
+	r, err := routes.NewRoute("admin", "http://www.google.com", "a@a.com", "ateam@t.com")
+	if err != nil {
+		t.Error(err.Error())
+		return
+	}
+
+	// make user an admin
+	_, err = s.MakeAdmin(r.Creator)
+	if err != nil {
+		t.Error(err.Error())
+		return
+	}
+
+	_ = s.GetAllUsers()
+	// confirm we did what we thought
+	user, err := s.GetUser(r.Creator)
+	t.Log(user)
+	_ = s.GetAllUsers()
+	if err != nil {
+		t.Error(err.Error())
+		return
+	}
+
+	if user.IsAdmin != 1 {
+		t.Error("User was not set as admin")
+		return
+	}
+
+	// lock route
+	affected, err := s.Lock(r)
+	if err != nil {
+		t.Error(err.Error())
+		return
+	}
+	if affected <= 0 {
+		t.Errorf("Expected rowcount to be one, was %d", int(affected))
+		return
+	}
+
+	// try modifying without being admin
+	// this should fail
+	r.URL = "http://www.new.com"
+	r.LastModifiedBy = "newuser@n.com"
+	_, err = s.Modify(r)
+	if err == nil {
+		t.Error("Expected error on modifying locked route if not admin")
+		return
+	}
+
+	// try again now that we're an admin
+	r.LastModifiedBy = r.Creator
+	_, err = s.Modify(r)
+	if err != nil {
+		t.Error(err.Error())
+		return
+	}
+
+}
+
 func TestRedis(t *testing.T) {
 
 	redisServer, err := miniredis.Run()
@@ -207,7 +276,7 @@ func TestRedis(t *testing.T) {
 	})
 
 	// NewStore is too smart so we have to force it
-	s, err := NewStore("sqlite", dbConn, redisClient, 300)
+	s, err := NewStore("sqlite", mysqlConn, redisClient, 300)
 	if err != nil {
 		// kill process because we won't have a DB anyway
 		t.Error(err.Error())
