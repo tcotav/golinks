@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/go-redis/redis"
@@ -23,6 +24,7 @@ import (
 // the handle to the database, i.e. the database handle representing a pool of zero or
 // more underlying connections.
 type DataStore struct {
+	init     sync.Once
 	dbtype   string
 	redisTTL time.Duration
 	db       *sql.DB
@@ -216,18 +218,21 @@ func (s *DataStore) Get(k string) (routes.Route, error) {
 	return routes.Route{}, errors.New("No match found")
 }
 
+// GetURL is the main entry point for the app.  It is the shortlink.  The other getters are
+// designed for potentially slower access via an editor tool.
 func (s *DataStore) GetURL(k string) (string, error) {
-	// check local cache
-	if s.cache != nil {
-		v, ok := s.cache.Get(k)
-		if ok {
-			return v.(string), nil
-		}
-	} else if s.redis != nil {
+	// we should not use the local cache if we have redis as that assumes we have multiple nodes
+	// and could have a local cache go stale
+	if s.redis != nil {
 		sRet, _ := s.redis.Get(k).Result()
 		if sRet != "" {
 			// update lcl cache and return
 			return sRet, nil
+		}
+	} else if s.cache != nil { // check local cache for single node runs
+		v, ok := s.cache.Get(k)
+		if ok {
+			return v.(string), nil
 		}
 	}
 
@@ -244,12 +249,12 @@ func (s *DataStore) GetURL(k string) (string, error) {
 			return "", err
 		}
 
-		if s.cache != nil {
-			// update local cache
-			s.cache.Add(k, url)
-		} else if s.redis != nil {
+		if s.redis != nil {
 			// update redis cache
 			s.redis.Set(k, url, s.redisTTL).Err()
+		} else if s.cache != nil {
+			// update local cache
+			s.cache.Add(k, url)
 		}
 		return url, nil
 	}
@@ -296,13 +301,13 @@ func (s *DataStore) Modify(r routes.Route) (int, error) {
 	// update the cache
 	// is it in the cache
 	// if it is, change the url
-	if s.cache != nil {
+	if s.redis != nil {
+		s.redis.Set(r.ShortKey, r.URL, s.redisTTL).Err()
+	} else if s.cache != nil {
 		if _, ok := s.cache.Get(r.ShortKey); !ok {
 			s.cache.Remove(r.ShortKey)
 			s.cache.Add(r.ShortKey, r.URL)
 		}
-	} else if s.redis != nil {
-		s.redis.Set(r.ShortKey, r.URL, s.redisTTL).Err()
 	}
 	return int(affect), nil
 }
@@ -324,12 +329,13 @@ func (s *DataStore) Delete(k string) error {
 	// update the cache
 	// is it in the cache
 	// if it is, change the url
-	if s.cache != nil {
+
+	if s.redis != nil {
+		s.redis.Del(k).Err()
+	} else if s.cache != nil {
 		if _, ok := s.cache.Get(k); !ok {
 			s.cache.Remove(k)
 		}
-	} else if s.redis != nil {
-		s.redis.Del(k).Err()
 	}
 
 	return nil
